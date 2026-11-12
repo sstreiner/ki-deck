@@ -907,13 +907,17 @@ The plugin's JavaScript and shell scripts need no code signature of their own; o
 
 ### 10.9 Releases on GitHub
 
-`.github/workflows/release.yml` runs `make release` on a GitHub-hosted Mac (`macos-26`, Node 24) and publishes `ki-deck-<version>.pkg`, `net.streiner.ki-deck.streamDeckPlugin`, `HANDBOOK.pdf` and `SHA256SUMS`.
+`.github/scripts/release.sh` builds a tag with `make release` and publishes `ki-deck-<version>.pkg`, `net.streiner.ki-deck.streamDeckPlugin`, `HANDBOOK.pdf` and `SHA256SUMS` as its GitHub release. It runs the same on a Mac (`make publish`) and in `.github/workflows/release.yml`.
 
-- Push a tag: `make version V=0.13.0`, commit, then `git tag v0.13.0 && git push origin v0.13.0`. The run fails when the tag is not `v` plus the version in `package.json`.
-- Run it by hand (Actions > Release > Run workflow): with the tag empty, it builds the chosen branch and keeps the files on the run only. With a tag, it builds that tag and creates its release, or replaces the files of a release that already exists.
-- Every run also keeps the files as a workflow artifact. Release notes are GitHub's generated ones, after a short install note.
-- The package is unsigned, so the first open needs "Open Anyway" (10.8). Signing on GitHub would need the two Developer ID certificates and the notary credentials as repository secrets.
-- Standard GitHub-hosted runners are free in public repositories. In a private one, a macOS minute uses ten of the free plan's monthly minutes.
+1. `make version V=0.13.0`, commit, then tag with the release notes as the message: `git tag -a v0.13.0` (the first line becomes the release title, the rest its notes, followed by GitHub's generated ones).
+2. `git push origin main v0.13.0`.
+3. `make publish`, or `.github/scripts/release.sh v0.13.0` for another tag.
+
+- The script checks the tag first: `vX.Y.Z`, the version in that commit's `package.json`, and the same commit on GitHub. Then it builds the tag in a temporary `git worktree` from a clean checkout (with `npm ci`), so uncommitted changes never reach a release, and copies the files to `dist/`. `--build-only` skips the publishing.
+- A release that already exists only gets its files replaced.
+- GitHub access goes through `gh`. It uses `GH_TOKEN` when set, otherwise the `gh` account named like the repository's owner (logged in with `gh auth login`; it does not have to be the active one), otherwise the active account.
+- A local build uses `make.local`, so with the Developer ID identities and a notary profile there (10.8) the release is signed and notarized. Unsigned, the first open needs "Open Anyway", and the notes say so unless the tag's message already does.
+- The workflow only runs by hand for now (Actions > Release > Run workflow): with the tag empty it builds the chosen branch and keeps the files on the run, with a tag it publishes that tag. Releasing on every pushed tag is commented out at the top of the workflow. Standard GitHub-hosted runners are free in public repositories; in a private one, a macOS minute uses ten of the free plan's monthly minutes.
 
 ## 11. Repository layout
 
@@ -921,7 +925,8 @@ The plugin's JavaScript and shell scripts need no code signature of their own; o
 ki-deck/
 ├── README.md
 ├── LICENSE                               MIT
-├── .github/workflows/release.yml         builds and publishes a release for every v<version> tag (10.9)
+├── .github/                              scripts/release.sh builds a tag and publishes its release (make publish);
+│                                         workflows/release.yml runs it on GitHub, by hand for now (10.9)
 ├── docs/HANDBOOK.md                      the user handbook; docs/handbook/img/ holds its generated pictures
 ├── bin/ki-deck                   CLI: doctor, status, gate, lockdown, permissions, profiles [--replace], test, config, uninstall, deck
 ├── hooks/
@@ -979,6 +984,7 @@ ki-deck/
 | `make pkg` | The plugin package, then `dist/ki-deck-<version>.pkg` with the uninstaller app (10.8); signed when `SIGN_ID` (package) and `SIGN_APP_ID` (app) are set |
 | `make notarize` | Notarize and staple the signed package (`NOTARY_PROFILE`) |
 | `make release` | `check`, the plugin package, the installer package (notarized when `NOTARY_PROFILE` is set), the handbook pictures and PDF, and `dist/SHA256SUMS` |
+| `make publish` | Build the tag `v<version>` in a clean worktree and publish it as a GitHub release (10.9) |
 | `make version V=0.11.0` | Set the version in `package.json`, `package-lock.json` and the manifest (`0.11.0.0`). The companion keeps its own (`extension/package.json`): bump it only when `src/companion/` changes, because every Kiro window offers a reload for a new companion |
 | `make clean` | Remove `dist/` and `build/` (the linked plugin's own build stays) |
 | `npm test` | Unit tests, plus `hooks/kd-hook` against a real bridge on a temporary socket |

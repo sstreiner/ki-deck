@@ -1,20 +1,19 @@
-# Builds ki-deck on a GitHub-hosted Mac with `make release` (typecheck, tests, validation, the
-# plugin, the installer package, the handbook PDF and SHA256SUMS) and publishes the files.
+# Builds and publishes a ki-deck release on a GitHub-hosted Mac, with the same script as a release
+# built on your own Mac (.github/scripts/release.sh, `make publish`).
 #
-#   git tag v0.12.0 && git push origin v0.12.0    builds that tag and creates its release
-#   Actions > Release > Run workflow               tag empty: builds the chosen branch, files only on
-#                                                  the run; a tag such as v0.12.0: builds that tag and
-#                                                  creates its release, or replaces the files of an
-#                                                  existing one
+#   Actions > Release > Run workflow   tag empty: builds the chosen branch, files only on the run;
+#                                      a tag such as v0.12.0: builds that tag and creates its
+#                                      release, or replaces the files of an existing one
 #
-# The tag has to be "v" plus the version in package.json (`make version V=0.12.0` sets it).
+# Releasing on every pushed tag is switched off for now: releases are built locally. To turn it
+# on, remove the comment marks in front of `push:` and `tags:` below.
 # Standard GitHub-hosted runners cost nothing in public repositories; in a private one, a macOS
 # minute uses ten of the free plan's monthly minutes.
 name: Release
 
 on:
-  push:
-    tags: ["v*"]
+  # push:
+  #   tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
@@ -40,17 +39,11 @@ jobs:
       # A pushed tag, the tag given to a manual run, or empty for a build without a release.
       TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
     steps:
-      - name: Check the tag
-        if: env.TAG != ''
-        run: |
-          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "::error::'$TAG' is not a release tag like v0.12.0"
-            exit 1
-          fi
-
+      # The chosen branch (or the pushed tag) with every tag: the script comes from here and builds
+      # the tag in a worktree of its own, as it does on a Mac.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.TAG != '' && format('refs/tags/{0}', env.TAG) || github.ref }}
+          fetch-depth: 0
           persist-credentials: false
 
       # No dependency cache: a release builds from the lockfile alone.
@@ -58,46 +51,23 @@ jobs:
         with:
           node-version: 24
 
-      - name: Read the version
-        id: version
+      - name: Build and publish
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          version=$(node -p "require('./package.json').version")
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          if [ -n "$TAG" ] && [ "$TAG" != "v$version" ]; then
-            echo "::error::tag $TAG does not match package.json ($version): run make version V=${TAG#v}, commit, and tag again"
-            exit 1
+          if [ -n "$TAG" ]; then
+            .github/scripts/release.sh "$TAG"
+          else
+            .github/scripts/release.sh --build-only
           fi
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build and test (make release)
-        run: make release
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ki-deck-${{ steps.version.outputs.version }}
+          name: ki-deck-${{ steps.release.outputs.version }}
           path: |
-            dist/ki-deck-${{ steps.version.outputs.version }}.pkg
+            dist/ki-deck-${{ steps.release.outputs.version }}.pkg
             dist/net.streiner.ki-deck.streamDeckPlugin
             dist/HANDBOOK.pdf
             dist/SHA256SUMS
           if-no-files-found: error
-
-      - name: Publish the release
-        if: env.TAG != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          files=("dist/ki-deck-$VERSION.pkg" dist/net.streiner.ki-deck.streamDeckPlugin dist/HANDBOOK.pdf dist/SHA256SUMS)
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
-            echo "Replaced the files of release $TAG"
-            exit 0
-          fi
-          notes="**Install:** open \`ki-deck-$VERSION.pkg\` (installs for your user, no administrator password), or double-click \`net.streiner.ki-deck.streamDeckPlugin\` to install through Stream Deck. \`HANDBOOK.pdf\` explains every key; \`SHA256SUMS\` has the checksums."
-          if ! pkgutil --check-signature "dist/ki-deck-$VERSION.pkg" >/dev/null 2>&1; then
-            notes+=$'\n\n'"The package is not signed: macOS blocks it on the first try. Then choose **Open Anyway** in System Settings > Privacy & Security."
-          fi
-          gh release create "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --verify-tag --title "ki-deck $VERSION" --notes "$notes" --generate-notes

@@ -25,3 +25,6 @@ graphify-out/
 CONTEXT.md
 MULTIOS.md
 TODO.md
+
+# ignore tag-msgs
+tag-msgs/

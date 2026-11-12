@@ -18,7 +18,7 @@ PLUGIN  := dist/net.streiner.ki-deck.streamDeckPlugin
 PKG     := dist/ki-deck-$(VERSION).pkg
 
 .DEFAULT_GOAL := build
-.PHONY: help build check typecheck test validate install handbook plugin pkg notarize release version clean
+.PHONY: help build check typecheck test validate install handbook plugin pkg notarize release publish version clean
 
 ## build      Icons, profiles, the plugin bundle and the companion .vsix (the default)
 build: ; npm run build && npm run companion
@@ -46,6 +46,9 @@ notarize: pkg ; node scripts/pkg/build.mjs notarize
 
 ## release    check, plugin, package (notarized when NOTARY_PROFILE is set), handbook PDF, SHA256SUMS
 release: check $(if $(NOTARY_PROFILE),notarize,pkg) ; scripts/make-handbook.sh && cd dist && shasum -a 256 $(notdir $(PLUGIN)) $(notdir $(PKG)) HANDBOOK.pdf > SHA256SUMS && cat SHA256SUMS
+
+## publish    Build the tag v<version> in a clean worktree and publish it as a GitHub release (.github/scripts/release.sh)
+publish: ; .github/scripts/release.sh
 
 ## version    Set the plugin version everywhere: make version V=0.11.0
 version: ; node scripts/version.mjs "$(V)"
