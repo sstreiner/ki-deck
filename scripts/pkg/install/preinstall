@@ -1,0 +1,44 @@
+#!/bin/sh
+# Runs before Installer copies the plugin into Stream Deck's plugin folder. The package installs
+# "for me only" (scripts/pkg/distribution.xml), so this runs as the user and $2 is the home
+# folder. A non-zero exit stops the install.
+set -u
+
+[ -n "${2:-}" ] || { echo "ki-deck: no home folder given" >&2; exit 1; }
+PLUGIN="$2/Library/Application Support/com.elgato.StreamDeck/Plugins/net.streiner.ki-deck.sdPlugin"
+
+# A developer's plugin is a link to a repository checkout (streamdeck link): never write through
+# it. Checked first, so a refused install changes nothing.
+if [ -L "$PLUGIN" ]; then
+  echo "ki-deck: $PLUGIN links to a repository checkout; update it with scripts/install.sh there" >&2
+  exit 1
+fi
+
+# Stream Deck must not run the plugin while its files change; postinstall starts it again. Ask it
+# to quit; if it is still running after 10 s (the request was refused, or it hangs), terminate it.
+running() { pgrep -f "Elgato Stream Deck.app/Contents/MacOS" >/dev/null 2>&1; }
+wait_gone() {
+  i=0
+  while running && [ "$i" -lt "$1" ]; do
+    sleep 1
+    i=$((i + 1))
+  done
+}
+if running; then
+  osascript -e 'tell application id "com.elgato.StreamDeck" to quit' >/dev/null 2>&1 || true
+  wait_gone 10
+  if running; then
+    pkill -TERM -f "Elgato Stream Deck.app/Contents/MacOS" >/dev/null 2>&1 || true
+    wait_gone 10
+  fi
+fi
+
+# Installer only adds and replaces files: remove the old copies so nothing stale survives.
+if [ -d "$PLUGIN" ]; then
+  rm -rf "$PLUGIN"
+fi
+UNINSTALLER="$2/Applications/Uninstall ki-deck.app"
+if [ -d "$UNINSTALLER" ] && [ ! -L "$UNINSTALLER" ]; then
+  rm -rf "$UNINSTALLER"
+fi
+exit 0

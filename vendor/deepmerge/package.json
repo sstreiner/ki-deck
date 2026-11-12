@@ -1,0 +1,8 @@
+{
+  "name": "deepmerge",
+  "version": "4.3.1-safe.1",
+  "private": true,
+  "description": "Prototype-safe drop-in for deepmerge 4.3.1 (CVE-2026-93753 has no upstream release); see index.js",
+  "license": "MIT",
+  "main": "index.js"
+}

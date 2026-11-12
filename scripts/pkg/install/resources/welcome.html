@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font: 13px -apple-system, "Helvetica Neue", sans-serif; line-height: 1.45; }
+    h1 { font-size: 15px; margin-top: 0; }
+    code { font: 12px ui-monospace, Menlo, monospace; }
+    li { margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <h1>ki-deck</h1>
+  <p>See what every Kiro session is doing on your Stream Deck, approve or deny its actions, and jump to the one that needs you.</p>
+  <p>This installer:</p>
+  <ul>
+    <li>puts the Kiro plugin into Stream Deck, for your user only, so no administrator password is needed;</li>
+    <li>quits Stream Deck while it copies the plugin and starts it again, so the keys go blank for a few seconds;</li>
+    <li>lets the plugin set up the Kiro side when it starts: kd-hook and the <code>ki-deck</code> command in <code>~/.ki-deck</code>, Kiro's global hooks in <code>~/.kiro/hooks</code>, and the Kiro companion extension;</li>
+    <li>puts the Kiro profile on your devices: Stream Deck asks once per device, then switches to it. Kiro profiles from an earlier version get this version's layouts; the old ones are backed up to <code>~/.ki-deck/backups</code>, and keys you changed by hand in them are replaced too.</li>
+  </ul>
+  <p>Nothing is gated, so Kiro keeps asking exactly as before. Undo it any time with <b>Uninstall ki-deck</b>, which this installer puts into the Applications folder in your home folder, or with <code>ki-deck uninstall</code> in Terminal.</p>
+  <p>You need the Stream Deck app 7.6 or later, and Kiro IDE or kiro-cli.</p>
+</body>
+</html>

@@ -1,0 +1,37 @@
+#!/bin/sh
+# Runs after Installer copied the plugin, as the user ("for me only"); $2 is the home folder.
+# Stream Deck is still quit (preinstall), which is what updating its profiles needs.
+set -u
+
+[ -n "${2:-}" ] || exit 0
+HOME="$2"
+export HOME
+unset KI_DECK_HOME
+SD="$HOME/Library/Application Support/com.elgato.StreamDeck"
+PLUGIN="$SD/Plugins/net.streiner.ki-deck.sdPlugin"
+SETUP="$PLUGIN/setup"
+
+# One-time consent for the Kiro side: the user just chose Install, so the plugin sets it up at its
+# next start without asking again, then deletes this file (src/bridge/setup.ts). It names the
+# version, so it only counts for the plugin it came with.
+if [ -f "$SETUP/PACKAGED" ]; then
+  cp "$SETUP/PACKAGED" "$SETUP/.consented"
+fi
+
+# Kiro profiles from an earlier version: Stream Deck never updates a profile it installed, so
+# give them this version's layouts now, with backups in ~/.ki-deck/backups/. Without
+# any, the plugin offers its profiles once it has set up the Kiro side.
+if grep -l -E '"InstalledByPluginUUID" *: *"net.streiner.ki-deck"' "$SD/ProfilesV3"/*.sdProfile/manifest.json >/dev/null 2>&1; then
+  /bin/sh "$SETUP/bin/ki-deck" profiles --replace --offline --yes ||
+    echo "ki-deck: could not update the Kiro profiles; run: ki-deck profiles --replace" >&2
+fi
+
+# Start Stream Deck, which loads the new plugin. When it is not installed yet, the plugin waits
+# in its folder and sets up the Kiro side the first time Stream Deck starts.
+# `open` hands this script's environment to the app, and Installer's is temporary: its TMPDIR
+# (/private/tmp/PKInstallSandbox.*/tmp) is gone once the install ends, and Stream Deck then fails
+# every profile import ("temp_directory_path ... is not a directory"). With an empty environment,
+# launchd gives Stream Deck the one a start from the Dock gets.
+OPEN=$(command -v open) || OPEN=/usr/bin/open
+env -i "$OPEN" -b com.elgato.StreamDeck >/dev/null 2>&1 || true
+exit 0

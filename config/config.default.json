@@ -1,0 +1,26 @@
+{
+  "gate": { "timeoutSeconds": 590, "onTimeout": "ask" },
+  "denyReasons": [
+    "Explain your plan first",
+    "Find the root cause first",
+    "Keep the change minimal",
+    "Do a dry run first"
+  ],
+  "cannedPrompts": ["Continue", "Check your work and fix issues", "Summarize what you changed"],
+  "notifications": {
+    "macos": true,
+    "sound": "Glass",
+    "push": null,
+    "quietHours": "22:00-07:00",
+    "minTurnSeconds": 30,
+    "mayNeedYou": false
+  },
+  "attention": { "mayNeedYouSeconds": 10 },
+  "usage": { "activeSeconds": 15, "refreshMinutes": 10 },
+  "staleAfterMinutes": 10,
+  "idleExpiryHours": 8,
+  "presentationMode": false,
+  "ledger": { "storeRaw": false },
+  "deck": { "autopilot": false, "models": [] },
+  "budget": { "warnPercent": 85 }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "ki-deck-companion",
+  "displayName": "ki-deck",
+  "description": "Lets ki-deck observe and control supported settings of Kiro IDE sessions from a Stream Deck.",
+  "version": "0.6.0",
+  "publisher": "sstreiner",
+  "author": "sstreiner",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Kiro runs no hooks in untrusted workspaces, so the companion stays off there too."
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {}
+}

@@ -1,0 +1,14 @@
+{
+  "extends": "@tsconfig/node24/tsconfig.json",
+  "compilerOptions": {
+    "customConditions": ["node"],
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "allowJs": true,
+    "checkJs": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/install.mjs", "scripts/install/**/*.mjs"],
+  "exclude": ["node_modules"]
+}

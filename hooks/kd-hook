@@ -1,0 +1,141 @@
+#!/bin/sh
+# kd-hook: forwards one Kiro hook event (JSON on stdin) to the ki-deck bridge.
+#
+#   kd-hook observe            Report only. Prints nothing and always exits 0.
+#   kd-hook gate <category>    PreToolUse gate for shell, write or mcp.
+#
+# Gate decisions, in order:
+#   1. Lockdown file present          -> deny (works even when Stream Deck is not running)
+#   2. Category not gated             -> exit 0: Kiro decides exactly as it would without us
+#   3. Bridge allows or denies        -> exit 0, or exit 2 with the reason for the agent
+#   4. Bridge unreachable or timeout  -> "ask": Kiro shows its own approval prompt
+#
+# Never fails open: no path here allows more than Kiro's own permission rules do.
+
+MODE="${1:-observe}"
+CATEGORY="${2:-}"
+BASE="${KI_DECK_HOME:-$HOME/.ki-deck}"
+SOCK="$BASE/run/bridge.sock"
+
+# Always read the event to EOF so Kiro never hits a broken pipe on large payloads.
+drain() { cat >/dev/null; }
+
+pass() {
+  drain
+  exit 0
+}
+
+deny() {
+  drain
+  printf '%s\n' "$1" >&2
+  exit 2
+}
+
+ask() {
+  drain
+  printf '{"hookSpecificOutput":{"permissionDecision":"ask","permissionDecisionReason":"%s"}}\n' "$1"
+  exit 0
+}
+
+# Kiro runs a tool call's hooks one after another and waits for each, so this script is on
+# the agent's critical path: it uses shell builtins wherever it can and forks only ps and curl.
+
+is_gated() {
+  [ -r "$BASE/gated" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ "$line" = "$1" ] && return 0
+  done <"$BASE/gated"
+  return 1
+}
+
+# Gate checks first: a category that is not gated costs no process at all.
+case "$MODE" in
+  observe) ;;
+  gate)
+    case "$CATEGORY" in shell | write | mcp) ;; *) pass ;; esac
+    [ -e "$BASE/lockdown" ] && deny "Blocked by Stream Deck lockdown. Stop, tell the user, and do not retry until they lift it."
+    is_gated "$CATEGORY" || pass
+    ;;
+  *)
+    pass
+    ;;
+esac
+
+# The agent harness process: our parent, unless Kiro's `sh -c` stayed in between.
+# One ps call reads the parent; a second one only when the parent is that shell.
+HARNESS=$PPID
+read -r PARENT TTY COMM <<EOF
+$(ps -o ppid=,tty=,comm= -p "$PPID" 2>/dev/null)
+EOF
+case "${COMM:-}" in
+  *sh | *bash)
+    HARNESS=${PARENT:-$PPID}
+    read -r PARENT TTY COMM <<EOF
+$(ps -o ppid=,tty=,comm= -p "$HARNESS" 2>/dev/null)
+EOF
+    ;;
+esac
+
+# kiro-cli 3.x runs its agent as a detached node process with no terminal, below the TUI
+# (bun, then kiro-cli) that has one. Take the terminal from up to two ancestors, only for that
+# process: IDE harnesses ("Kiro Helper (Plugin)") never pay for the extra ps calls.
+TTY=${TTY:-}
+case "$TTY" in "" | "??")
+  case "${COMM:-}" in */kiro-cli/*)
+    for _ in 1 2; do
+      [ -n "${PARENT:-}" ] && [ "$PARENT" -gt 1 ] 2>/dev/null || break
+      read -r PARENT TTY COMM <<EOF
+$(ps -o ppid=,tty=,comm= -p "$PARENT" 2>/dev/null)
+EOF
+      case "${TTY:-}" in "" | "??") ;; *) break ;; esac
+    done
+    ;;
+  esac
+  ;;
+esac
+
+# IDE harnesses have no controlling terminal; kiro-cli does (also inside Kiro's terminal).
+TTY=${TTY:-}
+if [ "${__CFBundleIdentifier:-}" = dev.kiro.desktop ] && { [ -z "$TTY" ] || [ "$TTY" = "??" ]; }; then
+  SURFACE=ide
+else
+  SURFACE=cli
+fi
+
+post() { # post <max seconds> <output file>
+  curl -s --unix-socket "$SOCK" --max-time "$1" \
+    -H "Content-Type: application/json" \
+    -H "X-KD-Mode: $MODE" \
+    -H "X-KD-Category: $CATEGORY" \
+    -H "X-KD-Surface: $SURFACE" \
+    -H "X-KD-Bundle: ${__CFBundleIdentifier:-}" \
+    -H "X-KD-Term: ${TERM_PROGRAM:-}" \
+    -H "X-KD-Term-Session: ${ITERM_SESSION_ID:-${TERM_SESSION_ID:-}}" \
+    -H "X-KD-Tmux-Pane: ${TMUX_PANE:-}" \
+    -H "X-KD-Tty: $TTY" \
+    -H "X-KD-Pid: $HARNESS" \
+    --data-binary @- -o "$2" -w '%{http_code}' \
+    http://localhost/v1/hook
+}
+
+if [ "$MODE" = observe ]; then
+  # Marker so `ki-deck doctor` can prove Kiro calls the hooks on each surface.
+  # `true >file` updates it without forking touch (`:` would end the script if it fails).
+  true 2>/dev/null >"$BASE/run/seen-$SURFACE"
+  [ -S "$SOCK" ] || pass
+  post 1 /dev/null >/dev/null
+  exit 0 # observers never influence Kiro
+fi
+
+if ! OUT=$(mktemp "${TMPDIR:-/tmp}/kd-hook.XXXXXX"); then
+  ask "ki-deck could not create a temp file. Decide in Kiro."
+fi
+trap 'rm -f "$OUT"' EXIT
+
+CODE=$(post 590 "$OUT") # Kiro's hook timeout for gates is 600 s; answer before it does.
+
+case "$CODE" in
+  200) cat "$OUT"; exit 0 ;;     # allowed: Kiro continues its normal evaluation
+  403) cat "$OUT" >&2; exit 2 ;; # denied: Kiro blocks the tool and passes the reason to the agent
+  *) ask "Stream Deck did not answer (HTTP $CODE). Decide in Kiro." ;;
+esac

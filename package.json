@@ -1,0 +1,53 @@
+{
+  "name": "ki-deck",
+  "version": "0.12.0",
+  "private": true,
+  "description": "Track and steer Kiro sessions from Elgato Stream Deck and Stream Deck Mobile.",
+  "author": "sstreiner",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "npm run icons && npm run profiles && rollup -c",
+    "icons": "node scripts/make-icons.mjs",
+    "profiles": "node scripts/build-profiles.mjs",
+    "companion": "node scripts/build-companion.mjs",
+    "handbook": "node scripts/make-handbook.mjs",
+    "handbook:pdf": "node scripts/make-handbook-pdf.mjs",
+    "package": "npm run build && npm run companion && node scripts/package.mjs",
+    "release": "npm run package && npm run handbook && npm run handbook:pdf",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "validate": "streamdeck validate net.streiner.ki-deck.sdPlugin",
+    "restart": "streamdeck restart net.streiner.ki-deck"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@elgato/streamdeck": "3.0.4"
+  },
+  "devDependencies": {
+    "@elgato/cli": "1.10.4",
+    "@rollup/plugin-commonjs": "29.0.3",
+    "@rollup/plugin-node-resolve": "16.0.3",
+    "@rollup/plugin-typescript": "12.3.1",
+    "@tsconfig/node24": "24.0.5",
+    "@types/node": "24.19.2",
+    "@types/vscode": "1.100.0",
+    "deepmerge": "file:vendor/deepmerge",
+    "marked": "18.1.3",
+    "rollup": "4.68.2",
+    "tslib": "2.9.1",
+    "typescript": "5.9.3",
+    "vitest": "5.1.0"
+  },
+  "overrides": {
+    "@elgato/utils": {
+      "zod": "4.6.7"
+    },
+    "deepmerge": "$deepmerge"
+  },
+  "allowScripts": {
+    "fsevents": false
+  }
+}

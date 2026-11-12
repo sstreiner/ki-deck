@@ -1,0 +1,17 @@
+{
+  "version": "v1",
+  "hooks": [
+    { "name": "ki-deck session start", "description": "Reports the event to Stream Deck. Never blocks.", "trigger": "SessionStart", "timeout": 3, "action": { "type": "command", "command": "\"$HOME/.ki-deck/bin/kd-hook\" observe" } },
+    { "name": "ki-deck prompt", "description": "Reports the event to Stream Deck. Never blocks.", "trigger": "UserPromptSubmit", "timeout": 3, "action": { "type": "command", "command": "\"$HOME/.ki-deck/bin/kd-hook\" observe" } },
+    { "name": "ki-deck tool start", "description": "Reports the event to Stream Deck. Never blocks.", "trigger": "PreToolUse", "timeout": 3, "action": { "type": "command", "command": "\"$HOME/.ki-deck/bin/kd-hook\" observe" } },
+    { "name": "ki-deck gate shell", "description": "Waits for a Stream Deck decision only when shell is gated or lockdown is on.", "trigger": "PreToolUse", "matcher": "shell", "timeout": 600, "action": { "type": "command", "command": "\"$HOME/.ki-deck/bin/kd-hook\" gate shell" } },
+    { "name": "ki-deck gate write", "description": "Waits for a Stream Deck decision only when write is gated or lockdown is on.", "trigger": "PreToolUse", "matcher": "write", "timeout": 600, "action": { "type": "command", "command": "\"$HOME/.ki-deck/bin/kd-hook\" gate write" } },
+    { "name": "ki-deck gate mcp", "description": "Waits for a Stream Deck decision only when mcp is gated or lockdown is on.", "trigger": "PreToolUse", "matcher": "@mcp", "timeout": 600, "action": { "type": "command", "command": "\"$HOME/.ki-deck/bin/kd-hook\" gate mcp" } },
+    { "name": "ki-deck tool end", "description": "Reports the event to Stream Deck. Never blocks.", "trigger": "PostToolUse", "timeout": 3, "action": { "type": "command", "command": "\"$HOME/.ki-deck/bin/kd-hook\" observe" } },
+    { "name": "ki-deck turn end", "description": "Reports the event to Stream Deck. Never blocks.", "trigger": "Stop", "timeout": 3, "action": { "type": "command", "command": "\"$HOME/.ki-deck/bin/kd-hook\" observe" } },
+    { "name": "ki-deck pre compact", "description": "Reports the event to Stream Deck. Never blocks.", "trigger": "PreCompact", "timeout": 3, "action": { "type": "command", "command": "\"$HOME/.ki-deck/bin/kd-hook\" observe" } },
+    { "name": "ki-deck post compact", "description": "Reports the event to Stream Deck. Never blocks.", "trigger": "PostCompact", "timeout": 3, "action": { "type": "command", "command": "\"$HOME/.ki-deck/bin/kd-hook\" observe" } },
+    { "name": "ki-deck task start", "description": "Reports the event to Stream Deck. Never blocks.", "trigger": "PreTaskExec", "timeout": 3, "action": { "type": "command", "command": "\"$HOME/.ki-deck/bin/kd-hook\" observe" } },
+    { "name": "ki-deck task end", "description": "Reports the event to Stream Deck. Never blocks.", "trigger": "PostTaskExec", "timeout": 3, "action": { "type": "command", "command": "\"$HOME/.ki-deck/bin/kd-hook\" observe" } }
+  ]
+}

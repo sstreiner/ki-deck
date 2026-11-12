@@ -1,0 +1,756 @@
+#!/bin/sh
+# ki-deck: configure and check the Kiro side of ki-deck.
+# Run `ki-deck help` for the command list.
+set -eu
+
+BASE="${KI_DECK_HOME:-$HOME/.ki-deck}"
+HOOK_FILE="$HOME/.kiro/hooks/ki-deck.json"
+SOCK="$BASE/run/bridge.sock"
+PLUGIN_UUID="net.streiner.ki-deck"
+COMPANION_ID="sstreiner.ki-deck-companion"
+KIRO_EXTENSIONS="$HOME/.kiro/extensions"
+SD_APP="/Applications/Elgato Stream Deck.app"
+SD_PLUGINS="$HOME/Library/Application Support/com.elgato.StreamDeck/Plugins"
+KIRO_APP="/Applications/Kiro.app"
+CATEGORIES="shell write mcp"
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'ki-deck: %s\n' "$*" >&2; exit 1; }
+
+# Kiro's `kiro` command, or the launcher inside Kiro.app when the command is not installed.
+kiro_cmd() {
+  if command -v kiro >/dev/null 2>&1; then
+    command -v kiro
+    return 0
+  fi
+  for app in "$KIRO_APP" "$HOME/Applications/Kiro.app"; do
+    if [ -x "$app/Contents/Resources/app/bin/code" ]; then
+      printf '%s\n' "$app/Contents/Resources/app/bin/code"
+      return 0
+    fi
+  done
+  return 1
+}
+
+usage() {
+  cat <<'EOF'
+Usage: ki-deck <command>
+
+  doctor                        Check the installation and show what is still missing
+  status                        Show gates, lockdown and bridge state
+  gate <shell|write|mcp> <on|off>
+                                Route approvals for a category through Stream Deck
+  lockdown <on|off>             Block shell, writes and MCP in every Kiro session
+  permissions [workspace]       Print the Kiro allow rules gate mode needs, and where they go
+  profiles [--replace] [--yes]  Put the Kiro profile on every connected Stream Deck device;
+                                --replace first swaps out older Kiro profiles (with backups)
+  test                          Send a synthetic shell approval through the gate
+  config                        Open config.json
+  uninstall [--purge] [--yes]   Remove hooks and scripts (--purge also deletes config and data)
+  deck <command>                Deck sessions: Kiro sessions Stream Deck runs and controls
+                                (model, effort, autopilot, stop, approvals). See: deck help
+  report [--days N] [--no-open] Write the activity report (HTML, last 30 days) and open it
+  push [status|test]            Push notifications to your phone: show the setting, or send a test
+EOF
+}
+
+deck_usage() {
+  cat <<'EOF'
+Usage: ki-deck deck <command>
+
+  start [options] [prompt|-]    Start a deck session in the current folder; "-" reads the prompt from stdin
+      --cwd DIR                   in DIR instead
+      --model ID                  with this model (see: deck models)
+      --effort LEVEL              with this effort level
+      --autopilot | --supervised  run tools on its own, or ask Stream Deck first (config: deck.autopilot)
+  say [--session ID] text|-     Prompt the session; while it works, steer the running turn instead
+  stop [--session ID]           Stop the running turn
+  model [--session ID] ID       Switch the model
+  effort [--session ID] LEVEL   Switch the effort level
+  autopilot [--session ID] on|off
+  set [--session ID] SETTING VALUE
+                                Any setting Kiro offers (mode, model, effortLevel, autopilot, ...)
+  list                          Deck sessions (* marks the one the deck keys act on)
+  models                        Models Kiro offers, with credit rates
+  open [--session ID]           Open the transcript
+  close [--session ID]          End the session
+
+Options come before the text. Without --session, commands act on the session the deck keys
+act on (the one picked last with its Session key, else the most recently used). ID may be a
+unique prefix.
+EOF
+}
+
+# Builds a JSON object from key/value arguments with JavaScriptCore (always on macOS), so
+# prompts reach the bridge exactly as typed. Empty values are left out; "autopilot" is a boolean.
+deck_json() {
+  osascript -l JavaScript -e 'function run(a){var o={};for(var i=0;i+1<a.length;i+=2){var k=a[i],v=a[i+1];if(v==="")continue;o[k]=k==="autopilot"?v==="true":v}return JSON.stringify(o)}' "$@"
+}
+
+# POSTs stdin (a JSON object) to the bridge path $1, prints the bridge's message, and fails
+# when the bridge declined.
+bridge_post() {
+  resp=$(curl -s --unix-socket "$SOCK" --max-time 120 -H "Content-Type: application/json" --data-binary @- "http://localhost$1") ||
+    die "no answer from the Stream Deck plugin"
+  out=$(osascript -l JavaScript -e 'function run(a){try{var o=JSON.parse(a[0])}catch(e){return "1\n"+a[0]}return (o.ok?"0":"1")+"\n"+o.message}' "$resp")
+  printf '%s\n' "$out" | tail -n +2
+  [ "$(printf '%s\n' "$out" | head -1)" = 0 ]
+}
+
+deck_post() { bridge_post "/v1/deck/$1"; }
+
+# One top-level field of a JSON object ($1), as text; empty when missing.
+json_field() {
+  osascript -l JavaScript -e 'function run(a){try{var v=JSON.parse(a[0])[a[1]]}catch(e){return ""}return v===undefined||v===null?"":String(v)}' "$1" "$2"
+}
+
+cmd_report() {
+  days=30 open=true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --days) [ $# -ge 2 ] || die "--days needs a number"; days="$2"; shift 2 ;;
+      --no-open) open=false; shift ;;
+      *) die "usage: ki-deck report [--days N] [--no-open]" ;;
+    esac
+  done
+  case "$days" in '' | *[!0-9]*) die "--days needs a number from 1 to 366" ;; esac
+  days=${days#"${days%%[!0]*}"} # "030" is 30: printf would read a leading 0 as octal
+  [ -n "$days" ] && [ "$days" -ge 1 ] && [ "$days" -le 366 ] || die "--days needs a number from 1 to 366"
+  bridge_health >/dev/null || die "the Stream Deck plugin is not running. Open Stream Deck first."
+  printf '{"days":%d,"open":%s}' "$days" "$open" | bridge_post /v1/report
+}
+
+cmd_push() {
+  sub="${1:-status}"
+  health=$(bridge_health) || die "the Stream Deck plugin is not running. Open Stream Deck first."
+  case "$sub" in
+    status)
+      p=$(json_field "$health" push)
+      say "push: ${p:-unknown (the running plugin is older than 0.9.0: run scripts/install.sh)}"
+      ;;
+    test) printf '{}' | bridge_post /v1/push/test ;;
+    *) die "usage: ki-deck push [status|test]" ;;
+  esac
+}
+
+cmd_deck() {
+  sub="${1:-help}"
+  [ $# -gt 0 ] && shift
+  case "$sub" in help | -h | --help) deck_usage; return 0 ;; esac
+  bridge_health >/dev/null || die "the Stream Deck plugin is not running. Open Stream Deck first."
+  session="" cwd="$PWD" model="" effort="" autopilot=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --session) [ $# -ge 2 ] || die "--session needs an ID"; session="$2"; shift 2 ;;
+      --cwd) [ $# -ge 2 ] || die "--cwd needs a folder"; cwd="$2"; shift 2 ;;
+      --model) [ $# -ge 2 ] || die "--model needs an ID"; model="$2"; shift 2 ;;
+      --effort) [ $# -ge 2 ] || die "--effort needs a level"; effort="$2"; shift 2 ;;
+      --autopilot) autopilot=true; shift ;;
+      --supervised) autopilot=false; shift ;;
+      --) shift; break ;;
+      *) break ;;
+    esac
+  done
+  # Everything left is the text (prompt) or the setting arguments.
+  text="$*"
+  [ "$text" = "-" ] && text=$(cat)
+  case "$sub" in
+    start)
+      [ -d "$cwd" ] || die "not a folder: $cwd"
+      cwd=$(cd "$cwd" && pwd -P)
+      deck_json cwd "$cwd" prompt "$text" model "$model" effort "$effort" autopilot "$autopilot" | deck_post start
+      ;;
+    say)
+      [ -n "$text" ] || die "usage: ki-deck deck say [--session ID] text"
+      deck_json session "$session" text "$text" | deck_post say
+      ;;
+    stop | open | close)
+      deck_json session "$session" | deck_post "$sub"
+      ;;
+    model | effort)
+      [ $# -eq 1 ] || die "usage: ki-deck deck $sub [--session ID] <value>"
+      setting=$sub
+      [ "$sub" = effort ] && setting=effortLevel
+      deck_json session "$session" setting "$setting" value "$1" | deck_post set
+      ;;
+    autopilot)
+      case "${1:-}" in on | off) ;; *) die "usage: ki-deck deck autopilot [--session ID] on|off" ;; esac
+      deck_json session "$session" setting autopilot value "$1" | deck_post set
+      ;;
+    set)
+      [ $# -eq 2 ] || die "usage: ki-deck deck set [--session ID] <setting> <value>"
+      deck_json session "$session" setting "$1" value "$2" | deck_post set
+      ;;
+    list | models)
+      deck_json session "$session" | deck_post "$sub"
+      ;;
+    *) deck_usage >&2; return 1 ;;
+  esac
+}
+
+is_category() { case "${1:-}" in shell | write | mcp) return 0 ;; *) return 1 ;; esac; }
+is_gated() { grep -qxF "$1" "$BASE/gated" 2>/dev/null; }
+gated_inline() { # gated categories on one line, empty when none
+  if [ -f "$BASE/gated" ]; then tr '\n' ' ' <"$BASE/gated" | sed 's/ *$//'; fi
+}
+require_install() { [ -x "$BASE/bin/kd-hook" ] || die "not installed. Run scripts/install.sh from the repository first."; }
+
+# Validates JSON with JavaScriptCore, which ships with every macOS.
+json_ok() {
+  osascript -l JavaScript \
+    -e 'function run(a){JSON.parse($.NSString.stringWithContentsOfFileEncodingError(a[0],4,null).js)}' \
+    "$1" >/dev/null 2>&1
+}
+
+# Prints 0 when version $1 >= $2 (major.minor only).
+version_at_least() {
+  awk -v a="$1" -v b="$2" 'BEGIN { split(a, x, "."); split(b, y, ".");
+    if (x[1] + 0 != y[1] + 0) exit !(x[1] + 0 > y[1] + 0); exit !(x[2] + 0 >= y[2] + 0) }'
+}
+
+app_version() { defaults read "$1/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || true; }
+
+bridge_health() {
+  [ -S "$SOCK" ] || return 1
+  curl -sf --unix-socket "$SOCK" --max-time 1 http://localhost/v1/health 2>/dev/null
+}
+
+age() { # human-readable age of a file's mtime
+  s=$(($(date +%s) - $(stat -f %m "$1")))
+  if [ "$s" -lt 120 ]; then say "${s}s ago"
+  elif [ "$s" -lt 7200 ]; then say "$((s / 60))m ago"
+  else say "$((s / 3600))h ago"; fi
+}
+
+write_gated() { # atomically replace the gated file with the given categories
+  tmp=$(mktemp "$BASE/gated.XXXXXX")
+  for c in "$@"; do printf '%s\n' "$c"; done >"$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$BASE/gated"
+}
+
+cmd_gate() {
+  [ $# -eq 2 ] && is_category "$1" || die "usage: ki-deck gate <shell|write|mcp> <on|off>"
+  case "$2" in on | off) ;; *) die "usage: ki-deck gate <shell|write|mcp> <on|off>" ;; esac
+  require_install
+  keep=""
+  for c in $CATEGORIES; do
+    if [ "$c" = "$1" ]; then
+      [ "$2" = on ] && keep="$keep $c"
+    elif is_gated "$c"; then
+      keep="$keep $c"
+    fi
+  done
+  # shellcheck disable=SC2086 # word splitting is intended
+  write_gated $keep
+  if [ "$2" = on ]; then
+    say "Gate on for $1: approvals wait for Stream Deck. If Stream Deck is unreachable, Kiro shows its own prompt."
+    say "To avoid approving twice, add the allow rules from: ki-deck permissions <workspace>"
+  else
+    say "Gate off for $1: Kiro decides as usual; Stream Deck only displays activity."
+  fi
+}
+
+cmd_lockdown() {
+  require_install
+  case "${1:-}" in
+    on)
+      : >"$BASE/lockdown"
+      chmod 600 "$BASE/lockdown"
+      say "Lockdown on: shell, writes and MCP are blocked in every Kiro session, even if Stream Deck is closed."
+      ;;
+    off)
+      rm -f "$BASE/lockdown"
+      say "Lockdown off."
+      ;;
+    *) die "usage: ki-deck lockdown <on|off>" ;;
+  esac
+}
+
+cmd_status() {
+  gated=$(gated_inline)
+  say "Gated categories: ${gated:-none (Mirror mode everywhere)}"
+  if [ -e "$BASE/lockdown" ]; then say "Lockdown:         ON"; else say "Lockdown:         off"; fi
+  if [ -f "$HOOK_FILE" ]; then say "Kiro hooks:       installed"; else say "Kiro hooks:       missing"; fi
+  if health=$(bridge_health); then say "Bridge:           running $health"; else say "Bridge:           not running"; fi
+}
+
+cmd_doctor() {
+  fails=0
+  pass() { printf '  ok    %s\n' "$*"; }
+  warn() { printf '  warn  %s\n' "$*"; }
+  fail() { printf '  FAIL  %s\n' "$*"; fails=$((fails + 1)); }
+
+  say "System"
+  mac=$(sw_vers -productVersion)
+  if version_at_least "$mac" 13.0; then pass "macOS $mac"; else fail "macOS $mac (13 or later required)"; fi
+  if command -v curl >/dev/null; then pass "curl"; else fail "curl not found"; fi
+
+  say "Stream Deck"
+  sd=$(app_version "$SD_APP")
+  if [ -z "$sd" ]; then
+    fail "Stream Deck app not found. Install it from https://www.elgato.com/downloads"
+  elif version_at_least "$sd" 7.6; then
+    pass "Stream Deck $sd"
+  else
+    fail "Stream Deck $sd (the plugin needs 7.6 or later)"
+  fi
+  if pgrep -f "Elgato Stream Deck.app/Contents/MacOS" >/dev/null; then pass "Stream Deck is running"; else warn "Stream Deck is not running"; fi
+  if [ -L "$SD_PLUGINS/$PLUGIN_UUID.sdPlugin" ] || [ -d "$SD_PLUGINS/$PLUGIN_UUID.sdPlugin" ]; then
+    pass "plugin $PLUGIN_UUID installed"
+  else
+    warn "plugin $PLUGIN_UUID not installed: double-click the .streamDeckPlugin package, or run scripts/install.sh from the repository"
+  fi
+  if health=$(bridge_health); then pass "bridge answering on $SOCK"; else warn "bridge not answering (starts with the plugin)"; fi
+
+  say "Kiro"
+  kv=$(app_version "$KIRO_APP")
+  if [ -n "$kv" ]; then pass "Kiro IDE $kv"; else warn "Kiro IDE not found in /Applications"; fi
+  if command -v kiro-cli >/dev/null; then
+    pass "$(kiro-cli --version 2>/dev/null | head -1)"
+    # Only the V3 engine runs global hooks; kiro-cli 3.0 chats on V2 unless told otherwise.
+    # Plain output names the scope too ("v3 (global)"); JSON is just the value ("v3").
+    engine=$(kiro-cli settings chat.agentEngine --format json 2>/dev/null | tr -d '"[:space:]')
+    case "$engine" in
+      v[0-9]*) ;;
+      *) engine=$(kiro-cli settings chat.agentEngine 2>/dev/null | awk 'NR == 1 { gsub(/"/, "", $1); print $1 }')
+         case "$engine" in v[0-9]*) ;; *) engine="" ;; esac ;;
+    esac
+    if [ "$engine" = v3 ]; then
+      pass "kiro-cli chat uses the V3 engine, which runs the hooks"
+    else
+      warn "kiro-cli chat uses the ${engine:-default V2} engine, which ignores ~/.kiro/hooks. Run: kiro-cli settings chat.agentEngine v3 (or start chats with --agent-engine v3)"
+    fi
+  else
+    warn "kiro-cli not found (only needed for CLI sessions and deck sessions)"
+  fi
+  companion=$(ls -d "$KIRO_EXTENSIONS/$COMPANION_ID-"* 2>/dev/null | sed "s|.*/$COMPANION_ID-||" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+  if [ -n "$companion" ]; then
+    pass "companion extension installed ($COMPANION_ID $companion)"
+    recent=$(ls -t "$BASE"/run/companion-*.jsonl 2>/dev/null | head -1)
+    [ -n "$recent" ] && pass "companion observed Kiro $(age "$recent")"
+    # Each open window keeps the companion it loaded; an older one may not pass prompts on.
+    for trace in "$BASE"/run/companion-*.jsonl; do
+      [ -e "$trace" ] || continue
+      pid=$(basename "$trace" .jsonl | sed 's/^companion-//')
+      ps -o comm= -p "$pid" 2>/dev/null | grep -q "Kiro Helper" || continue
+      running=$(grep -o '"event":"started","version":"[^"]*"' "$trace" | tail -1 | sed 's/.*"version":"//; s/"$//')
+      # The window's own folders come first on its latest endpoints line; the rest are other windows'.
+      folder=$(grep '"event":"endpoints"' "$trace" | tail -1 | grep -o '"folders":\["[^"]*"' | head -1 | sed 's/.*\["//; s/"$//')
+      where="the Kiro window ${folder:+for $(basename "$folder") }(extension host $pid)"
+      if [ "$running" = "$companion" ]; then
+        pass "$where runs the current companion"
+      else
+        warn "$where runs companion ${running:-0.2.0 or older}, so its prompts, chat focus or context use may not reach the deck. Reload it: Command Palette -> Developer: Reload Window"
+      fi
+    done
+    # Companion 0.4.0 holds a command stream to the bridge (chat focus, context use).
+    if [ -n "${health:-}" ] && printf '%s' "$health" | grep -q '"companions"'; then
+      linked=$(printf '%s' "$health" | grep -o '"host":[0-9]*' | wc -l | tr -d ' ')
+      if [ "$linked" -gt 0 ]; then
+        pass "$linked Kiro window(s) linked to the bridge: Session keys open their chat and show context use"
+      else
+        warn "no Kiro window linked to the bridge: windows need companion 0.4.0 or later (reload them)"
+      fi
+    fi
+  else
+    warn "companion extension not installed (optional; lets the deck answer Kiro's own IDE prompts). Install: scripts/install.sh"
+  fi
+
+  say "ki-deck"
+  if [ -d "$BASE" ] && [ "$(stat -f %Lp "$BASE")" = 700 ]; then pass "$BASE (private)"; else fail "$BASE missing or not mode 700"; fi
+  if [ -x "$BASE/bin/kd-hook" ]; then pass "kd-hook installed"; else fail "kd-hook missing: run scripts/install.sh"; fi
+  if [ ! -f "$HOOK_FILE" ]; then
+    fail "hook file missing: $HOOK_FILE"
+  elif ! json_ok "$HOOK_FILE"; then
+    fail "hook file is not valid JSON: $HOOK_FILE"
+  else
+    pass "hook file $HOOK_FILE"
+  fi
+  for f in "$HOME"/.kiro/hooks/*.json; do
+    [ -e "$f" ] && [ "$f" != "$HOOK_FILE" ] && warn "other global hooks run alongside: $(basename "$f")"
+  done
+  if [ -e "$BASE/run/seen-ide" ]; then
+    pass "Kiro IDE called the hooks $(age "$BASE/run/seen-ide")"
+  else
+    warn "no event from the Kiro IDE yet: open a NEW chat session, send a prompt, run doctor again"
+  fi
+  if [ -e "$BASE/run/seen-cli" ]; then
+    pass "kiro-cli called the hooks $(age "$BASE/run/seen-cli")"
+  else
+    warn "no event from kiro-cli yet: start a NEW kiro-cli chat, send a prompt, run doctor again"
+  fi
+  gated=$(gated_inline)
+  if [ -n "$gated" ]; then
+    warn "gated: $gated. Kiro needs matching allow rules to avoid double prompts: ki-deck permissions <workspace>"
+  else
+    pass "no gates (Mirror mode): Kiro prompts exactly as before"
+  fi
+  if [ -e "$BASE/lockdown" ]; then warn "lockdown is ON: ki-deck lockdown off"; fi
+
+  say "Optional"
+  if command -v terminal-notifier >/dev/null; then pass "terminal-notifier"; else warn "terminal-notifier not installed (brew install terminal-notifier) for clickable notifications"; fi
+  if [ -n "${health:-}" ]; then
+    push=$(json_field "$health" push)
+    case "$push" in
+      "" ) ;;
+      off) pass "push notifications off (optional: notifications.push, then ki-deck push test)" ;;
+      invalid*) warn "push notifications: $push" ;;
+      *) pass "push notifications: $push" ;;
+    esac
+  fi
+
+  say ""
+  if [ "$fails" -eq 0 ]; then say "No blocking problems."; else say "$fails blocking problem(s)."; return 1; fi
+}
+
+cmd_permissions() {
+  ws_in="${1:-$PWD}"
+  [ -d "$ws_in" ] || die "not a directory: $ws_in"
+  found=""
+  # Observed, not documented: Kiro names the folder after the first 16 hex chars of
+  # sha256(workspace path). Try the path as given and with symlinks resolved.
+  for ws in "$(cd "$ws_in" && pwd -L)" "$(cd "$ws_in" && pwd -P)"; do
+    hash=$(printf '%s' "$ws" | shasum -a 256 | cut -c1-16)
+    if [ -d "$HOME/.kiro/workspace-roots/$hash" ]; then found="$HOME/.kiro/workspace-roots/$hash/permissions.yaml"; break; fi
+  done
+  say "Workspace: $(cd "$ws_in" && pwd -P)"
+  if [ -n "$found" ]; then
+    say "Permissions file: $found"
+  else
+    say "Permissions file: not created yet. In Kiro, open the Command Palette and run"
+    say "  \"Open Permissions (Workspace)\", or pick \"Always allow → This workspace\" once."
+  fi
+  gated=$(cat "$BASE/gated" 2>/dev/null || true)
+  [ -n "$gated" ] || { say ""; say "No category is gated, so no rules are needed."; return 0; }
+  say ""
+  say "Add these items under 'rules:' (this command never edits the file for you):"
+  say ""
+  for c in $gated; do
+    case "$c" in
+      shell) say '  - capability: shell'; say '    effect: allow'; say '    match: ["*"]' ;;
+      write) say '  - capability: fs_write'; say '    effect: allow'; say '    match: ["./**"]' ;;
+      mcp) say '  - capability: mcp'; say '    effect: allow'; say '    match: ["*"]' ;;
+    esac
+  done
+  if is_gated shell; then
+    say '  - capability: shell'
+    say '    effect: deny        # deny always wins, even over Stream Deck'
+    say '    match: ["sudo *", "rm -rf *", "git push --force*"]'
+  fi
+}
+
+cmd_test() {
+  require_install
+  say "Sending a synthetic 'shell: echo ki-deck self-test' through the gate..."
+  if ! is_gated shell && [ ! -e "$BASE/lockdown" ]; then
+    say "(shell is not gated, so the gate should pass straight through)"
+  elif [ -S "$SOCK" ]; then
+    say "(watch your Stream Deck and answer the request)"
+  fi
+  set +e
+  out=$(printf '%s' '{"hook_event_name":"PreToolUse","session_id":"ki-deck-selftest","cwd":"/tmp","tool_name":"shell","tool_input":{"command":"echo ki-deck self-test"}}' |
+    "$BASE/bin/kd-hook" gate shell 2>&1)
+  rc=$?
+  set -e
+  case "$rc" in
+    0) if [ -n "$out" ]; then say "Result: handed back to Kiro's own prompt -> $out"; else say "Result: allowed (exit 0)"; fi ;;
+    2) say "Result: denied (exit 2) -> $out" ;;
+    *) say "Result: unexpected exit $rc -> $out"; return 1 ;;
+  esac
+}
+
+SD_PROFILES="$HOME/Library/Application Support/com.elgato.StreamDeck/ProfilesV3"
+PLUGIN_DIR="$SD_PLUGINS/$PLUGIN_UUID.sdPlugin"
+sd_running() { pgrep -f "Elgato Stream Deck.app/Contents/MacOS" >/dev/null 2>&1; }
+# The first "pid" of /v1/health, before any list: the bridge's own process.
+bridge_pid() { bridge_health | sed -n -E 's/^[^[]*"pid":([0-9]+).*/\1/p'; }
+
+# Number of actions (keys, dials, folders) on a profile's pages.
+action_count() { cat "$1"/Profiles/*/manifest.json 2>/dev/null | grep -o '"ActionID"' | wc -l | tr -d ' '; }
+
+# Puts the pages of $2 (a new profile manifest) into $1 (an installed one), keeping everything
+# Stream Deck stored about the installed profile: its device, name and plugin link.
+take_pages() {
+  osascript -l JavaScript -e '
+    function read(p) { return JSON.parse($.NSString.stringWithContentsOfFileEncodingError(p, 4, null).js) }
+    function run(a) {
+      var installed = read(a[0]), fresh = read(a[1])
+      installed.Pages = fresh.Pages
+      if (!$(JSON.stringify(installed)).writeToFileAtomicallyEncodingError(a[0], true, 4, null)) throw new Error("cannot write " + a[0])
+      return "ok"
+    }' "$1" "$2" >/dev/null
+}
+
+# Swaps in the new pages of every planned profile ("installed|unpacked" lines in $plan),
+# backing each one up first. Returns non-zero at the first failure.
+apply_plan() {
+  while IFS='|' read -r profile fresh; do
+    [ -n "$profile" ] || continue
+    cp -R "$profile" "$backup/" || return 1
+    mv "$profile/Profiles" "$work/$(basename "$profile").old-pages" || return 1
+    mv "$fresh/Profiles" "$profile/Profiles" || return 1
+    take_pages "$profile/manifest.json" "$fresh/manifest.json" || return 1
+    say "  updated $(basename "$profile")"
+  done <<EOF
+$plan
+EOF
+}
+
+# Stream Deck never updates a profile it installed, so this updates the installed Kiro profiles
+# in place with the plugin's current layouts: same profile and device, new pages. Stream Deck
+# has to be quit while its files change. Deleting the old profiles instead makes Stream Deck
+# count fewer actions than it saved, call it data loss and offer to restore a backup.
+#
+# With offline=1 (the installer package, scripts/pkg/install/postinstall), Stream Deck is already
+# quit: update the files only, without quitting, restarting or waiting for the plugin.
+replace_profiles() {
+  yes=$1
+  offline=${2:-0}
+  found=$(grep -l -E "\"InstalledByPluginUUID\" *: *\"$PLUGIN_UUID\"" "$SD_PROFILES"/*.sdProfile/manifest.json 2>/dev/null || true)
+  if [ -z "$found" ]; then
+    if [ "$offline" = 1 ]; then say "No Kiro profile is installed yet; nothing to update."
+    else say "No Kiro profile is installed yet, so there is nothing to replace; installing instead."
+    fi
+    return 0
+  fi
+  [ -d "$PLUGIN_DIR/profiles" ] || die "the plugin's profiles are missing ($PLUGIN_DIR/profiles): run scripts/install.sh first"
+  backup="$BASE/backups/profiles-$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$BASE/run"
+  work=$(mktemp -d "$BASE/run/profiles.XXXXXX")
+  trap 'rm -rf "$work"' EXIT
+  plan=""
+  fewer=0
+  while IFS= read -r f; do
+    profile=$(dirname "$f")
+    name=$(sed -n -E 's/.*"Name" *: *"([^"]*)".*/\1/p' "$f" | head -1)
+    bundled=$(sed -n -E 's/.*"PreconfiguredName" *: *"([^"]*)".*/\1/p' "$f" | head -1)
+    zip="$PLUGIN_DIR/$bundled.streamDeckProfile"
+    if [ -z "$bundled" ] || [ ! -f "$zip" ]; then
+      say "  skip $name: the plugin no longer ships ${bundled:-its layout}"
+      continue
+    fi
+    unpack="$work/$(basename "$profile")"
+    mkdir -p "$unpack"
+    /usr/bin/unzip -q "$zip" -d "$unpack" || die "cannot read $zip"
+    fresh=$(ls -d "$unpack"/*.sdProfile | head -1)
+    old=$(action_count "$profile")
+    new=$(action_count "$fresh")
+    [ "$new" -lt "$old" ] && fewer=1
+    say "  $name: $old actions now, $new in the current layout"
+    plan="$plan$profile|$fresh
+"
+  done <<EOF
+$found
+EOF
+  [ -n "$plan" ] || { say "Nothing to replace."; return 0; }
+  say "Their keys change to the current layouts; keys you changed by hand in them are replaced too."
+  if [ "$offline" = 1 ]; then
+    say "Backups go to $backup."
+  else
+    say "Backups go to $backup. Stream Deck quits and restarts; its keys go blank for a few seconds."
+  fi
+  if [ "$fewer" = 1 ]; then
+    say "A layout has fewer actions than before, so Stream Deck may say it detected an error restoring"
+    say "the last session and offer a backup: choose Cancel (Restore would undo this and more)."
+  fi
+  if [ "$yes" != 1 ]; then
+    [ -t 0 ] || die "not a terminal: re-run with --yes"
+    printf 'Continue? [y/N] '
+    read -r answer
+    case "$answer" in y | Y | yes) ;; *) say "Nothing changed."; exit 0 ;; esac
+  fi
+
+  if [ "$offline" = 1 ]; then
+    sd_running && die "Stream Deck is running; nothing changed. Quit it first, or leave out --offline."
+    mkdir -p "$backup"
+    apply_plan || die "updating a profile failed; the untouched copies are in $backup"
+    say "Done. Undo: quit Stream Deck, then put the folders from $backup back into ProfilesV3."
+    return 0
+  fi
+
+  before=$(bridge_pid || true)
+  osascript -e 'tell application id "com.elgato.StreamDeck" to quit' >/dev/null 2>&1 || true
+  i=0
+  while sd_running && [ "$i" -lt 20 ]; do sleep 1; i=$((i + 1)); done
+  sd_running && die "Stream Deck did not quit; nothing changed."
+  mkdir -p "$backup"
+  if ! apply_plan; then
+    open -b com.elgato.StreamDeck
+    die "updating a profile failed; the untouched copies are in $backup"
+  fi
+  open -b com.elgato.StreamDeck
+  i=0
+  now=""
+  while [ "$i" -lt 60 ]; do
+    now=$(bridge_pid || true)
+    [ -n "$now" ] && [ "$now" != "$before" ] && break
+    sleep 1
+    i=$((i + 1))
+  done
+  [ -n "$now" ] && [ "$now" != "$before" ] || die "the plugin did not come back after the restart; run ki-deck profiles once Stream Deck is up."
+  say "Done. Undo: quit Stream Deck, then put the folders from $backup back into ProfilesV3."
+}
+
+cmd_profiles() {
+  replace=0 yes=0 offline=0
+  for a in "$@"; do
+    case "$a" in
+      --replace) replace=1 ;;
+      --yes | -y) yes=1 ;;
+      --offline) offline=1 ;; # Stream Deck is quit: only update the files (the installer package)
+      *) die "usage: ki-deck profiles [--replace [--offline]] [--yes]" ;;
+    esac
+  done
+  if [ "$offline" = 1 ]; then
+    [ "$replace" = 1 ] || die "--offline only works with --replace"
+    replace_profiles "$yes" 1
+    return 0
+  fi
+  [ "$replace" = 1 ] && replace_profiles "$yes"
+  bridge_health >/dev/null || die "the Stream Deck plugin is not running. Open Stream Deck first."
+  # Stream Deck drops a deep link that arrives before the plugin has connected to it, and the
+  # bridge's socket opens earlier than that (seen right after --replace restarted Stream Deck).
+  # Plugins before 0.8.0 do not report "streamDeck"; for them, send at once.
+  i=0
+  while [ "$i" -lt 30 ]; do
+    health=$(bridge_health || true)
+    case "$health" in *'"streamDeck":true'* | '' ) break ;; *'"streamDeck":'*) ;; *) break ;; esac
+    sleep 1
+    i=$((i + 1))
+  done
+  # The plugin answers this deep link by switching each device to its bundled profile;
+  # Stream Deck asks before installing one the first time.
+  open "streamdeck://plugins/message/$PLUGIN_UUID/profiles"
+  say "Stream Deck switches each connected device to its Kiro profile."
+  say "The first time, it asks whether to install the profile: confirm in the Stream Deck app,"
+  say "and the device switches to it a few seconds later."
+}
+
+cmd_config() {
+  [ -f "$BASE/config.json" ] || die "no config yet. Run scripts/install.sh first."
+  if kiro=$(kiro_cmd); then "$kiro" "$BASE/config.json"; else open -t "$BASE/config.json"; fi
+}
+
+# The uninstaller app the installer package puts into ~/Applications (scripts/pkg/build.mjs).
+# Only that app, recognized by its bundle identifier, is ever removed.
+UNINSTALLER_APP="$HOME/Applications/Uninstall ki-deck.app"
+uninstaller_ours() {
+  [ -d "$UNINSTALLER_APP" ] && [ ! -L "$UNINSTALLER_APP" ] &&
+    [ "$(plutil -extract CFBundleIdentifier raw -o - "$UNINSTALLER_APP/Contents/Info.plist" 2>/dev/null)" = "$PLUGIN_UUID.uninstaller" ]
+}
+
+# Removes the plugin folder the installer package put into Stream Deck. Stream Deck must not run
+# it meanwhile: ask it to quit, terminate it after 10 s (as scripts/pkg/install/preinstall does),
+# and start it again afterwards if it was running.
+remove_pkg_plugin() {
+  was_running=0
+  if sd_running; then
+    was_running=1
+    osascript -e 'tell application id "com.elgato.StreamDeck" to quit' >/dev/null 2>&1 || true
+    i=0
+    while sd_running && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
+    if sd_running; then
+      pkill -TERM -f "Elgato Stream Deck.app/Contents/MacOS" >/dev/null 2>&1 || true
+      i=0
+      while sd_running && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
+    fi
+  fi
+  case "$PLUGIN_DIR" in */com.elgato.StreamDeck/Plugins/"$PLUGIN_UUID".sdPlugin) rm -rf "$PLUGIN_DIR" ;; esac
+  say "Removed the Stream Deck plugin. Kiro keys on your profiles stay until you delete them."
+  if [ "$was_running" = 1 ]; then open -b com.elgato.StreamDeck >/dev/null 2>&1 || true; fi
+}
+
+cmd_uninstall() {
+  purge=0 yes=0
+  for a in "$@"; do
+    case "$a" in --purge) purge=1 ;; --yes | -y) yes=1 ;; *) die "unknown option: $a" ;; esac
+  done
+  case "$BASE" in */.ki-deck | */ki-deck) ;; *) die "refusing to remove unexpected path: $BASE" ;; esac
+
+  # A plugin folder the macOS installer package (make pkg) put there: its receipt names it, so it
+  # is ours to remove. One from a double-clicked .streamDeckPlugin belongs to Stream Deck.
+  from_pkg=0
+  if [ ! -L "$PLUGIN_DIR" ] && [ -d "$PLUGIN_DIR" ] && pkgutil --volume "$HOME" --pkg-info "$PLUGIN_UUID" >/dev/null 2>&1; then
+    from_pkg=1
+  fi
+
+  say "This removes:"
+  say "  $HOOK_FILE"
+  say "  $BASE/bin, $BASE/run, gate and lockdown state"
+  [ "$purge" = 1 ] && say "  $BASE (config, event ledger, backups)"
+  [ -L "$PLUGIN_DIR" ] && say "  the linked Stream Deck plugin"
+  [ "$from_pkg" = 1 ] && say "  the Stream Deck plugin from the installer package (Stream Deck quits and starts again)"
+  uninstaller_ours && say "  $UNINSTALLER_APP"
+  ls -d "$KIRO_EXTENSIONS/$COMPANION_ID-"* >/dev/null 2>&1 && say "  the Kiro companion extension"
+  if [ "$yes" != 1 ]; then
+    [ -t 0 ] || die "not a terminal: re-run with --yes"
+    printf 'Continue? [y/N] '
+    read -r answer
+    case "$answer" in y | Y | yes) ;; *) say "Nothing changed."; return 0 ;; esac
+  fi
+
+  rm -f "$HOOK_FILE"
+  if [ -L "$PLUGIN_DIR" ]; then
+    rm -f "$PLUGIN_DIR"
+    say "Plugin unlinked. Quit and reopen Stream Deck to unload it."
+  elif [ "$from_pkg" = 1 ]; then
+    remove_pkg_plugin
+  elif [ -d "$PLUGIN_DIR" ]; then
+    # Until Stream Deck removes it, keep the plugin from offering the setup again at every start
+    # (src/bridge/setup.ts: "Not now" for this version). The Inbox key still offers it.
+    [ -f "$PLUGIN_DIR/setup/PACKAGED" ] && cp "$PLUGIN_DIR/setup/PACKAGED" "$PLUGIN_DIR/setup/.declined" 2>/dev/null
+    say "The plugin was installed from a package: remove it in Stream Deck → Preferences → Plugins."
+  fi
+  # The installer package installs for this user and leaves a receipt in ~/Library/Receipts;
+  # forget it, so the Mac does not list the package as installed.
+  if pkgutil --volume "$HOME" --pkg-info "$PLUGIN_UUID" >/dev/null 2>&1; then
+    pkgutil --volume "$HOME" --forget "$PLUGIN_UUID" >/dev/null 2>&1 && say "Forgot the installer package's receipt."
+  fi
+  if ls -d "$KIRO_EXTENSIONS/$COMPANION_ID-"* >/dev/null 2>&1; then
+    if kiro=$(kiro_cmd) && "$kiro" --uninstall-extension "$COMPANION_ID" >/dev/null 2>&1; then
+      say "Companion extension removed. Reload open Kiro windows to drop it."
+    else
+      say "Remove the companion extension in Kiro's Extensions view ($COMPANION_ID)."
+    fi
+  fi
+  # Last of the files the package installed. When this runs from that app, it has already read
+  # what it needs, so removing its folder does not stop it.
+  if uninstaller_ours; then
+    rm -rf "$UNINSTALLER_APP"
+    say "Removed $UNINSTALLER_APP."
+  fi
+  # Every folder the installer may link the command into (scripts/install/).
+  for d in "$HOME/.local/bin" "$HOME/bin" /opt/homebrew/bin /usr/local/bin; do
+    if [ -L "$d/ki-deck" ] && [ "$(readlink "$d/ki-deck")" = "$BASE/bin/ki-deck" ]; then
+      rm -f "$d/ki-deck"
+    fi
+  done
+  if [ "$purge" = 1 ]; then
+    rm -rf "$BASE"
+  else
+    rm -rf "$BASE/bin" "$BASE/run"
+    rm -f "$BASE/gated" "$BASE/lockdown" "$BASE/VERSION"
+    say "Kept $BASE/config.json, data and backups. Use --purge to delete them."
+  fi
+  say "Uninstalled. Running Kiro sessions keep the old hooks until they end; new sessions start clean."
+}
+
+cmd="${1:-help}"
+[ $# -gt 0 ] && shift
+case "$cmd" in
+  doctor) cmd_doctor ;;
+  status) cmd_status ;;
+  gate) cmd_gate "$@" ;;
+  lockdown) cmd_lockdown "$@" ;;
+  permissions) cmd_permissions "$@" ;;
+  profiles) cmd_profiles "$@" ;;
+  test) cmd_test ;;
+  config) cmd_config ;;
+  uninstall) cmd_uninstall "$@" ;;
+  deck) cmd_deck "$@" ;;
+  report) cmd_report "$@" ;;
+  push) cmd_push "$@" ;;
+  help | -h | --help) usage ;;
+  *) usage >&2; exit 1 ;;
+esac

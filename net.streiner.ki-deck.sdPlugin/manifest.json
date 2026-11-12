@@ -1,0 +1,388 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "UUID": "net.streiner.ki-deck",
+  "Name": "ki-deck",
+  "Version": "0.12.0.0",
+  "Author": "sstreiner",
+  "Description": "See what every Kiro session is doing, approve or deny its actions, and jump to the one that needs you.",
+  "Category": "ki-deck",
+  "CategoryIcon": "imgs/plugin/category-icon",
+  "Icon": "imgs/plugin/marketplace",
+  "CodePath": "bin/plugin.js",
+  "SDKVersion": 3,
+  "Software": {
+    "MinimumVersion": "7.6"
+  },
+  "OS": [
+    {
+      "Platform": "mac",
+      "MinimumVersion": "13"
+    }
+  ],
+  "Nodejs": {
+    "Version": "24"
+  },
+  "ApplicationsToMonitor": {
+    "mac": [
+      "dev.kiro.desktop"
+    ]
+  },
+  "Actions": [
+    {
+      "UUID": "net.streiner.ki-deck.session",
+      "Name": "Session",
+      "Tooltip": "Shows one Kiro session. Press to focus its window (deck sessions: target it and open its transcript); hold to mark a finished turn as seen, or to remove the session. As a dial: rotate to pick a session, push to focus it.",
+      "Icon": "imgs/actions/session/icon",
+      "Controllers": [
+        "Keypad",
+        "Encoder"
+      ],
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "imgs/actions/session/key",
+          "ShowTitle": false
+        }
+      ],
+      "Encoder": {
+        "layout": "layouts/canvas.json",
+        "TriggerDescription": {
+          "Rotate": "Pick a session",
+          "Push": "Focus it",
+          "Touch": "Focus it",
+          "LongTouch": "Mark as seen, then remove"
+        }
+      }
+    },
+    {
+      "UUID": "net.streiner.ki-deck.inbox",
+      "Name": "Inbox",
+      "Tooltip": "Counts Kiro sessions waiting on you, approvals first. Press to focus the first, hold to mark finished turns as seen. On the Neo infobar: what waits on you, and credits.",
+      "Icon": "imgs/actions/inbox/icon",
+      "Controllers": [
+        "Keypad",
+        "Neo"
+      ],
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "imgs/actions/inbox/key",
+          "ShowTitle": false
+        }
+      ]
+    },
+    {
+      "UUID": "net.streiner.ki-deck.allow",
+      "Name": "Allow",
+      "Tooltip": "Allows the oldest tool call waiting for Stream Deck.",
+      "Icon": "imgs/actions/allow/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "States": [
+        {
+          "Image": "imgs/actions/allow/key",
+          "ShowTitle": false
+        }
+      ]
+    },
+    {
+      "UUID": "net.streiner.ki-deck.deny",
+      "Name": "Deny",
+      "Tooltip": "Denies the oldest tool call waiting for Stream Deck. Profiles can give it a preset reason the agent sees.",
+      "Icon": "imgs/actions/deny/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "States": [
+        {
+          "Image": "imgs/actions/deny/key",
+          "ShowTitle": false
+        }
+      ]
+    },
+    {
+      "UUID": "net.streiner.ki-deck.decide-in-kiro",
+      "Name": "Decide in Kiro",
+      "Tooltip": "Hands the oldest waiting tool call to Kiro's own prompt and brings its window forward.",
+      "Icon": "imgs/actions/decide-in-kiro/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "SupportedInKeyLogicActions": false,
+      "States": [
+        {
+          "Image": "imgs/actions/decide-in-kiro/key",
+          "ShowTitle": false
+        }
+      ]
+    },
+    {
+      "UUID": "net.streiner.ki-deck.lockdown",
+      "Name": "Lockdown",
+      "Tooltip": "Blocks shell, writes and MCP in every Kiro session. Each press toggles it.",
+      "Icon": "imgs/actions/lockdown/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "DisableAutomaticStates": true,
+      "States": [
+        {
+          "Image": "imgs/actions/lockdown/key",
+          "ShowTitle": false
+        },
+        {
+          "Image": "imgs/actions/lockdown/key-on",
+          "ShowTitle": false
+        }
+      ]
+    },
+    {
+      "UUID": "net.streiner.ki-deck.usage",
+      "Name": "Usage",
+      "Tooltip": "Shows Kiro credits used this billing cycle, or today's activity. Credits: press to refresh, hold for the activity report. Today: press for the report. As a dial: credits on the touch strip.",
+      "Icon": "imgs/actions/usage/icon",
+      "Controllers": [
+        "Keypad",
+        "Encoder"
+      ],
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "imgs/actions/usage/key",
+          "ShowTitle": false
+        }
+      ],
+      "Encoder": {
+        "layout": "layouts/canvas.json",
+        "TriggerDescription": {
+          "Push": "Refresh credits",
+          "Touch": "Refresh credits; hold for the report"
+        }
+      }
+    },
+    {
+      "UUID": "net.streiner.ki-deck.gate",
+      "Name": "Gate",
+      "Tooltip": "Makes shell, write or MCP calls wait for Allow or Deny on Stream Deck. Each press turns the gate on or off.",
+      "Icon": "imgs/actions/gate/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "DisableAutomaticStates": true,
+      "States": [
+        {
+          "Image": "imgs/actions/gate/key",
+          "ShowTitle": false
+        },
+        {
+          "Image": "imgs/actions/gate/key-on",
+          "ShowTitle": false
+        }
+      ]
+    },
+    {
+      "UUID": "net.streiner.ki-deck.request",
+      "Name": "Request",
+      "Tooltip": "Shows the waiting tool call in full. Put several in a row for a banner. Press to bring its window forward.",
+      "Icon": "imgs/actions/request/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "imgs/actions/request/key",
+          "ShowTitle": false
+        }
+      ]
+    },
+    {
+      "UUID": "net.streiner.ki-deck.model",
+      "Name": "Model",
+      "Tooltip": "Deck sessions: shows the model and its credit rate. Press for the next model; a key with a slot applies its own model. As a dial: rotate to choose, push to apply.",
+      "Icon": "imgs/actions/model/icon",
+      "Controllers": [
+        "Keypad",
+        "Encoder"
+      ],
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "imgs/actions/model/key",
+          "ShowTitle": false
+        }
+      ],
+      "Encoder": {
+        "layout": "layouts/canvas.json",
+        "TriggerDescription": {
+          "Rotate": "Choose a model",
+          "Push": "Apply it",
+          "Touch": "Apply it"
+        }
+      }
+    },
+    {
+      "UUID": "net.streiner.ki-deck.effort",
+      "Name": "Effort",
+      "Tooltip": "Deck sessions: shows the effort level. Press for the next level the model offers. As a dial: rotate to change it.",
+      "Icon": "imgs/actions/effort/icon",
+      "Controllers": [
+        "Keypad",
+        "Encoder"
+      ],
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "imgs/actions/effort/key",
+          "ShowTitle": false
+        }
+      ],
+      "Encoder": {
+        "layout": "layouts/canvas.json",
+        "TriggerDescription": {
+          "Rotate": "Change the effort level"
+        }
+      }
+    },
+    {
+      "UUID": "net.streiner.ki-deck.autonomy",
+      "Name": "Autonomy",
+      "Tooltip": "Deck sessions: Autopilot runs tools on its own, Supervised asks Stream Deck first. Each press switches.",
+      "Icon": "imgs/actions/autonomy/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "DisableAutomaticStates": true,
+      "States": [
+        {
+          "Image": "imgs/actions/autonomy/key",
+          "ShowTitle": false
+        },
+        {
+          "Image": "imgs/actions/autonomy/key-on",
+          "ShowTitle": false
+        }
+      ]
+    },
+    {
+      "UUID": "net.streiner.ki-deck.stop",
+      "Name": "Stop",
+      "Tooltip": "Deck sessions: stops the running turn.",
+      "Icon": "imgs/actions/stop/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "imgs/actions/stop/key",
+          "ShowTitle": false
+        }
+      ]
+    },
+    {
+      "UUID": "net.streiner.ki-deck.prompt",
+      "Name": "Prompt",
+      "Tooltip": "Deck sessions: sends a canned prompt from config.json, or steers the running turn with it.",
+      "Icon": "imgs/actions/prompt/icon",
+      "Controllers": [
+        "Keypad"
+      ],
+      "UserTitleEnabled": false,
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "imgs/actions/prompt/key",
+          "ShowTitle": false
+        }
+      ]
+    }
+  ],
+  "Profiles": [
+    {
+      "Name": "profiles/kiro-stream-deck",
+      "DeviceType": 0,
+      "Readonly": false,
+      "DontAutoSwitchWhenInstalled": true,
+      "AutoInstall": true
+    },
+    {
+      "Name": "profiles/kiro-mini",
+      "DeviceType": 1,
+      "Readonly": false,
+      "DontAutoSwitchWhenInstalled": true,
+      "AutoInstall": true
+    },
+    {
+      "Name": "profiles/kiro-xl",
+      "DeviceType": 2,
+      "Readonly": false,
+      "DontAutoSwitchWhenInstalled": true,
+      "AutoInstall": true
+    },
+    {
+      "Name": "profiles/kiro-mobile",
+      "DeviceType": 3,
+      "Readonly": false,
+      "DontAutoSwitchWhenInstalled": true,
+      "AutoInstall": true
+    },
+    {
+      "Name": "profiles/kiro-mobile-6",
+      "DeviceType": 3,
+      "Readonly": false,
+      "DontAutoSwitchWhenInstalled": true,
+      "AutoInstall": false
+    },
+    {
+      "Name": "profiles/kiro-pedal",
+      "DeviceType": 5,
+      "Readonly": false,
+      "DontAutoSwitchWhenInstalled": true,
+      "AutoInstall": true
+    },
+    {
+      "Name": "profiles/kiro-plus",
+      "DeviceType": 7,
+      "Readonly": false,
+      "DontAutoSwitchWhenInstalled": true,
+      "AutoInstall": true
+    },
+    {
+      "Name": "profiles/kiro-neo",
+      "DeviceType": 9,
+      "Readonly": false,
+      "DontAutoSwitchWhenInstalled": true,
+      "AutoInstall": true
+    },
+    {
+      "Name": "profiles/kiro-plus-xl",
+      "DeviceType": 13,
+      "Readonly": false,
+      "DontAutoSwitchWhenInstalled": true,
+      "AutoInstall": true
+    }
+  ]
+}
